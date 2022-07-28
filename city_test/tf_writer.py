@@ -24,9 +24,10 @@ def load_dataset(data_path, img_shape):
         else:
             test_image_sets.append(images)
             test_mask_sets.append(masks)
-
-    train_image_sets = np.concatenate(train_image_sets, axis=0)
-    train_mask_sets = np.concatenate(train_mask_sets, axis=0)
+    # train_image_sets = np.concatenate(train_image_sets, axis=0)
+    # train_mask_sets = np.concatenate(train_mask_sets, axis=0)
+    train_image_sets = np.array(train_image_sets)
+    train_mask_sets = np.array(train_mask_sets)
     # test_image_sets = np.concatenate(test_image_sets, axis=0)
     # test_mask_sets = np.concatenate(test_mask_sets, axis=0)
 
@@ -51,18 +52,20 @@ def load_mask(file):
 
 def make_tfrecord(dataset, dataname, split, tfr_path):
     image, mask = dataset
+    print(image.shape)
     writer = None
     serializer = tfs.TfrSerializer()
     example_per_shard = 10000
-
     for i, (img, msk) in enumerate(zip(image, mask)):
+        cv2.imshow('img', img)
+        print(img.shape)
+        cv2.waitKey()
         if i % example_per_shard == 0:
             writer = open_tfr_writer(writer, tfr_path, dataname, split, i//example_per_shard)
 
         example = {"image": img, "mask": msk}
         serialized = serializer(example)
         writer.write(serialized)
-    writer.close()
 
 
 def open_tfr_writer(writer, tfr_path, dataname, split, shard_index):

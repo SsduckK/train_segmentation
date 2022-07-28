@@ -3,6 +3,7 @@ class DATA_INFO:
     TFRECORD_PATH = "/home/cheetah/lee_ws/tfrecord"
     CLASS = ['person', 'rider', 'car', 'truck', 'bus', 'motorcycle', 'bicycle']
     IMAGE_SHAPE = (1024, 2048, 3)
+    BATCH_SIZE = 4
 
     # LABEL = {'person': {'id': 0, 'color': (60, 20, 220)},
     #          'rider': {'id': 1, 'color': (0, 0, 255)},
