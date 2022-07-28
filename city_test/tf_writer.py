@@ -4,18 +4,18 @@ from glob import glob
 import cv2
 import numpy as np
 import tensorflow as tf
+from time import time
 
 import Config
 import TFSerializer as tfs
 
 
-def load_dataset(data_path, img_shape):
-    files = glob(op.join(data_path, 'leftImg8bit', 'leftImg8bit', '*', 'aachen', '*'))
+def load_dataset(data_path):
+    files = glob(op.join(data_path, '*.png'))
     train_image_sets = []
     train_mask_sets = []
     test_image_sets = []
     test_mask_sets = []
-    split = str
     for file in files:
         images, masks = read_data(file)
         if "train" in file:
@@ -24,12 +24,11 @@ def load_dataset(data_path, img_shape):
         else:
             test_image_sets.append(images)
             test_mask_sets.append(masks)
-    # train_image_sets = np.concatenate(train_image_sets, axis=0)
-    # train_mask_sets = np.concatenate(train_mask_sets, axis=0)
+
     train_image_sets = np.array(train_image_sets)
     train_mask_sets = np.array(train_mask_sets)
-    # test_image_sets = np.concatenate(test_image_sets, axis=0)
-    # test_mask_sets = np.concatenate(test_mask_sets, axis=0)
+    test_image_sets = np.array(test_image_sets)
+    test_mask_sets = np.array(test_mask_sets)
 
     print("[load_cityscape_dataset] image_train", train_image_sets.shape, len(train_image_sets))
     print("[load_cityscape_dataset] mask_train", train_mask_sets.shape, len(train_mask_sets))
@@ -50,43 +49,46 @@ def load_mask(file):
     return mask
 
 
-def make_tfrecord(dataset, dataname, split, tfr_path):
+def make_tfrecord(dataset, dataname, split, tfr_path, dir_path):
     image, mask = dataset
-    print(image.shape)
     writer = None
     serializer = tfs.TfrSerializer()
     example_per_shard = 10000
+    region = dir_path.split('/')[-1]
     for i, (img, msk) in enumerate(zip(image, mask)):
-        cv2.imshow('img', img)
-        print(img.shape)
-        cv2.waitKey()
         if i % example_per_shard == 0:
-            writer = open_tfr_writer(writer, tfr_path, dataname, split, i//example_per_shard)
+            writer = open_tfr_writer(writer, tfr_path, dataname, split, i//example_per_shard, region)
 
         example = {"image": img, "mask": msk}
         serialized = serializer(example)
         writer.write(serialized)
 
 
-def open_tfr_writer(writer, tfr_path, dataname, split, shard_index):
+def open_tfr_writer(writer, tfr_path, dataname, split, shard_index, dir_path):
     if writer:
         writer.close()
 
     tfrdata_path = op.join(tfr_path, f"{dataname}_{split}")
     if op.isdir(tfr_path) and not op.isdir(tfrdata_path):
         os.mkdir(tfrdata_path)
-    tfrfile = op.join(tfrdata_path, f"shard_{shard_index:03d}.tfrecord")
+    tfrfile = op.join(tfrdata_path, f"shard_{dir_path}_{shard_index:03d}.tfrecord")
     writer = tf.io.TFRecordWriter(tfrfile)
     print(f"create tfrecord file: {tfrfile}")
     return writer
 
 
 def write_tfrecord():
-    train_set, test_set = load_dataset(Config.DATA_INFO.RAW_DATA_PATH, Config.DATA_INFO.IMAGE_SHAPE)
-    if not op.isdir(Config.DATA_INFO.TFRECORD_PATH):
-        os.mkdir(Config.DATA_INFO.TFRECORD_PATH)
-    make_tfrecord(train_set, "city", "train", Config.DATA_INFO.TFRECORD_PATH)
-    make_tfrecord(test_set, "city", "test", Config.DATA_INFO.TFRECORD_PATH)
+    dir_paths = glob(op.join(Config.DATA_INFO.RAW_DATA_PATH, "leftImg8bit", "leftImg8bit", '*', '*'))
+    dir_paths.sort()
+    for dir_path in dir_paths:
+        start = time()
+        train_set, test_set = load_dataset(dir_path)
+        if not op.isdir(Config.DATA_INFO.TFRECORD_PATH):
+            os.mkdir(Config.DATA_INFO.TFRECORD_PATH)
+        make_tfrecord(train_set, "city", "train", Config.DATA_INFO.TFRECORD_PATH, dir_path)
+        make_tfrecord(test_set, "city", "test", Config.DATA_INFO.TFRECORD_PATH, dir_path)
+        end = time()
+        print("time taken ", end - start)
 
 
 if __name__ == "__main__":
