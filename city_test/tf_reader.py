@@ -14,7 +14,7 @@ def read_tfrecord():
     train_dataset = get_dataset(Config.DATA_INFO.TFRECORD_PATH, "city", "train", True, Config.DATA_INFO.BATCH_SIZE)
     test_dataset = get_dataset(Config.DATA_INFO.TFRECORD_PATH, "city", "test", False, Config.DATA_INFO.BATCH_SIZE)
     check_data(train_dataset)
-    classifier = AdvancedClassifer(Config.DATA_INFO.BATCH_SIZE)
+    check_data(test_dataset)
 
 
 def get_dataset(tfr_path, dataname, split, shuffle=False, batch_size=4, epochs=1):
@@ -64,6 +64,7 @@ def show_samples(images, masks, grid=(3, 3)):
         print(image.shape)
         cv2.imshow("image", image.numpy())
         cv2.imshow("mask", mask.numpy())
+        cv2.waitKey()
 
 
 if __name__ == "__main__":
