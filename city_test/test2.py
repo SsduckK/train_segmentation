@@ -1,0 +1,240 @@
+import os
+import os.path as op
+import tensorflow as tf
+import numpy as np
+import pickle
+from glob import glob
+import cv2
+import matplotlib.pyplot as plt
+
+
+class Config:
+    RAW_DATA_PATH = "/media/cheetah/IntHDD/datasets/cifar-10-python/cifar-10-batches-py"
+    TFRECORD_PATH = "/home/cheetah/lee_ws"
+    CLASS_NAMES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+    CIFAR_IMG_SHAPE = (32, 32, 3)
+    BATCH_SIZE = 32
+
+
+def write_cifar10_tfrecord():
+    test_serializer()
+    train_set, test_set = load_cifar10_dataset(Config.RAW_DATA_PATH, Config.CIFAR_IMG_SHAPE)
+    make_tfrecord(train_set, "cifar10", "train", Config.CLASS_NAMES, Config.TFRECORD_PATH)
+    make_tfrecord(test_set, "cifar10", "test", Config.CLASS_NAMES, Config.TFRECORD_PATH)
+
+
+def load_cifar10_dataset(data_path, img_shape):
+    train_files = glob(os.path.join(data_path, "data_*"))
+    train_labels = []
+    train_images = []
+    for file in train_files:
+        labels, images = read_data(file, img_shape)
+        train_labels += labels
+        train_images.append(images)
+    train_images = np.concatenate(train_images, axis=0)
+
+    test_file = os.path.join(data_path, "test_batch")
+    test_labels, test_images = read_data(test_file, img_shape)
+
+    print("[load_cifar10_dataset] train image and label shape:", train_images.shape, len(train_labels))
+    print("[load_cifar10_dataset] test image and label shape: ", test_images.shape, len(test_labels))
+    return (train_images, train_labels), (test_images, test_labels)
+
+
+def read_data(file, img_shape):
+    with open(file, 'rb') as fr:
+        data = pickle.load(fr, encoding='bytes')
+        labels = data[b"labels"]    # list of category indices, [10000], int
+        images = data[b"data"]      # numpy array, [10000, 3072(=32x32x3)], np.uint8
+        # CIFAR dataset is encoded in channel-first format
+        images = images.reshape((-1, img_shape[2], img_shape[0], img_shape[1]))
+        # convert to back channel-last format
+        images = np.transpose(images, (0, 2, 3, 1))
+    return labels, images
+
+
+def test_serializer():
+    pass
+
+
+def make_tfrecord(dataset, dataname, split, class_names, tfr_path):
+    xs, ys = dataset
+    labels = np.array(class_names)
+    labels = labels[ys]
+    writer = None
+    serializer = TfrSerializer()
+    examples_per_shard = 10000
+
+    for i, (x, y, label) in enumerate(zip(xs, ys, labels)):
+        if i % examples_per_shard == 0:
+            writer = open_tfr_writer(writer, tfr_path, dataname, split, i//examples_per_shard)
+
+        example = {"image": x, "label_index": y, "label_name": label}
+        serialized = serializer(example)
+        writer.write(serialized)
+    writer.close()
+
+
+def open_tfr_writer(writer, tfr_path, dataname, split, shard_index):
+    if writer:
+        writer.close()
+
+    tfrdata_path = os.path.join(tfr_path, f"{dataname}_{split}")
+    if os.path.isdir(tfr_path) and not os.path.isdir(tfrdata_path):
+        os.makedirs(tfrdata_path)
+    tfrfile = os.path.join(tfrdata_path, f"shard_{shard_index:03d}.tfrecord")
+    writer = tf.io.TFRecordWriter(tfrfile)
+    print(f"create tfrecord file: {tfrfile}")
+    return writer
+
+
+class TfrSerializer:
+    def __call__(self, raw_example):
+        features = self.convert_to_feature(raw_example)
+        features = tf.train.Features(feature=features)
+        tf_example = tf.train.Example(features=features)
+        serialized = tf_example.SerializeToString()
+        return serialized
+
+    def convert_to_feature(self, raw_example):
+        features = dict()
+        for key, value in raw_example.items():
+            if value is None:
+                continue
+            elif isinstance(value, np.ndarray):
+                # method 1: encode into raw bytes
+                # fast but losing shape, 2 seconds to make training dataset
+                value = value.tobytes()
+                # method 2: encode into png format
+                # slow but keeping shape, 10 seconds to make training dataset
+                # value = tf.io.encode_png(value)
+                # BytesList won't unpack a tf.string from an EagerTensor.
+                # value = value.numpy()
+                features[key] = self._bytes_feature(value)
+            elif isinstance(value, str):
+                value = bytes(value, 'utf-8')
+                features[key] = self._bytes_feature(value)
+            elif isinstance(value, int):
+                features[key] = self._int64_feature(value)
+            elif isinstance(value, float):
+                features[key] = self._float_feature(value)
+            else:
+                assert 0, f"[convert_to_feature] Wrong data type: {type(value)}"
+        return features
+
+    @staticmethod
+    def _bytes_feature(value):
+        """Returns a bytes_list from a string / byte."""
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+    @staticmethod
+    def _float_feature(value):
+        """Returns a float_list from a float / double."""
+        return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
+
+    @staticmethod
+    def _int64_feature(value):
+        """Returns an int64_list from a bool / enum / int / uint."""
+        return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+
+# if __name__ == "__main__":
+#     write_cifar10_tfrecord()
+
+# =========
+
+def read_cifar10_tfrecord():
+    gpu_config()
+    train_dataset = get_dataset(Config.TFRECORD_PATH, "cifar10", "train", True, Config.BATCH_SIZE)
+    test_dataset = get_dataset(Config.TFRECORD_PATH, "cifar10", "test", False, Config.BATCH_SIZE)
+    check_data(train_dataset)
+    classifier = AdvancedClassifier(Config.BATCH_SIZE)
+    classifier.build_model(Config.CIFAR_IMG_SHAPE, len(Config.CLASS_NAMES))
+    classifier.train(train_dataset, test_dataset, 5)
+    classifier.evaluate(test_dataset)
+
+
+def get_dataset(tfr_path, dataname, split, shuffle=False, batch_size=32, epochs=1):
+    tfr_files = tf.io.gfile.glob(op.join(tfr_path, f"{dataname}_{split}", "*.tfrecord"))
+    tfr_files.sort()
+    print("[TfrecordReader] tfr files:", tfr_files)
+    dataset = tf.data.TFRecordDataset(tfr_files)
+    dataset = dataset.map(parse_example)
+    dataset = set_properties(dataset, shuffle, epochs, batch_size)
+    return dataset
+
+def parse_example(example):
+    features = {
+        "image": tf.io.FixedLenFeature(shape=(), dtype=tf.string, default_value=""),
+        "label_index": tf.io.FixedLenFeature(shape=(), dtype=tf.int64, default_value=0),
+        "label_name": tf.io.FixedLenFeature(shape=(), dtype=tf.string, default_value=""),
+    }
+    parsed = tf.io.parse_single_example(example, features)
+    # method 1. decode from raw bytes
+    parsed["image"] = tf.io.decode_raw(parsed["image"], tf.uint8)
+    # only for visualization
+    parsed["image_u8"] = tf.reshape(parsed["image"], Config.CIFAR_IMG_SHAPE)
+    parsed["image"] = tf.image.convert_image_dtype(parsed["image_u8"], dtype=tf.float32)     # for model input
+    # method 2. decode from png format
+    # parsed["image"] = tf.io.decode_png(parsed["image"])
+    return parsed
+
+def set_properties(dataset, shuffle: bool, epochs: int, batch_size: int):
+    if shuffle:
+        dataset = dataset.shuffle(100)
+    dataset = dataset.batch(batch_size).repeat(epochs)
+    return dataset
+
+def check_data(dataset):
+    for i, features in enumerate(dataset):
+        print("sample:", i, features["image"].shape,
+              features["label_index"][:8].numpy(), features["label_name"][:8].numpy())
+        if i == 0:
+            show_samples(features["image_u8"], features["label_name"])
+        if i > 5:
+            break
+
+def show_samples(images, labels, grid=(3, 3)):
+    plt.figure(figsize=grid)
+    num_samples = grid[0] * grid[1]
+    for i in range(num_samples):
+        plt.subplot(grid[0], grid[1], i+1)
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.imshow(images[i].numpy())
+        plt.xlabel(labels[i].numpy().decode())
+    plt.show()
+
+"""
+classfier model
+"""
+from tensorflow import keras
+from tensorflow.keras import layers
+from timeit import default_timer as timer
+
+class DurationTime:
+    pass	# same as tf_classifier_adv.py
+
+def gpu_config():
+    pass	# same as tf_classifier_adv.py
+
+class AdvancedClassifier:
+    def __init__(self, batch_size=32):
+        pass	# same as tf_classifier_adv.py
+
+    def build_model(self, input_shape, output_shape):
+        pass	# same as tf_classifier_adv.py
+
+    def train(self, train_dataset, val_dataset, epochs):
+        pass
+
+    @tf.function
+    def train_batch_graph(self, x_batch, y_batch):
+        pass	# same as tf_classifier_adv.py
+
+    def evaluate(self, dataset, verbose=True):
+        pass
+
+if __name__ == "__main__":
+    read_cifar10_tfrecord()
